@@ -2,20 +2,34 @@
 #include "util.h"
 #include <stdio.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <sys/syscall.h>
 
 struct requester_info
 {
 	FILE ** files;
 	int file_num;
+	pthread_t * thread;
 };
 
 void * requester(void * ptr)
 {
 	struct requester_info * info = ((struct requester_info *)ptr);
+	char * line = NULL;
+	size_t len = 0;
+	ssize_t line_length;
+
+	while((line_length = getline(&line, &len, info->files[info->file_num]) != -1))
+	{
+		printf("thread %d read %s", syscall(SYS_gettid), line);
+	}
+
+	free(line);
+
 	pthread_exit(0);
 }
 
-struct requester_info * init_requester_info(int num_requesters, int num_files, FILE ** files)
+struct requester_info * init_requester_info(int num_requesters, int num_files, FILE ** files, pthread_t * requester_threads)
 {
 	struct requester_info * params_list = (struct requester_info *)malloc(sizeof(* params_list) * num_requesters);
 
@@ -26,6 +40,7 @@ struct requester_info * init_requester_info(int num_requesters, int num_files, F
 		*/
 		params_list[i].files = files;
 		params_list[i].file_num = i % num_files;
+		params_list[i].thread = &requester_threads[i];
 	}
 
 	return params_list;
@@ -120,7 +135,7 @@ int main(int argc, char const *argv[])
 
 	// Next goal: multiple requester_threads reading the files and writing it
 	requester_threads = (pthread_t *)malloc(sizeof(pthread_t) * num_requesters);
-	requester_params_list = init_requester_info(num_requesters, num_files, files);
+	requester_params_list = init_requester_info(num_requesters, num_files, files, requester_threads);
 
 	for(int i = 0; i < num_requesters; i++)
 	{
