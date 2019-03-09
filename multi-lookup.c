@@ -9,7 +9,10 @@ struct requester_info
 {
 	FILE ** files;
 	int file_num;
+	int num_files;
 	pthread_t * thread;
+	pthread_mutex_t * serviced_write_lock;
+	FILE * requester_log;
 };
 
 void * requester(void * ptr)
@@ -18,18 +21,38 @@ void * requester(void * ptr)
 	char * line = NULL;
 	size_t len = 0;
 	ssize_t line_length;
+	int files_serviced = 0;
+	int total_lines_serviced = 0;
 
-	while((line_length = getline(&line, &len, info->files[info->file_num]) != -1))
+	for(int i = 0; i < info->num_files; i++)
 	{
-		printf("thread %d read %s", syscall(SYS_gettid), line);
-	}
+		int lines_serviced = 0; // Keeps track if the thread has serviced at least one line of a  file
+		while((line_length = getline(&line, &len, info->files[info->file_num]) != -1))
+		{
+			//printf("thread %ld read %s", syscall(SYS_gettid), line);
+			lines_serviced++;
+		}
 
+		if(lines_serviced > 0)
+		{
+			files_serviced++;
+			total_lines_serviced += lines_serviced;
+		}
+
+		// Move to servicing the next file
+		info->file_num = (info->file_num + 1) % info->num_files;
+	}
 	free(line);
+
+	// Does not need to be synchronized, because it is thread safe if multiple
+	// threads in the same process write to the same file.
+	// http://man7.org/linux/man-pages/man3/fopen.3.html
+	fprintf(info->requester_log, "Thread %ld serviced %d files and %d lines \n", syscall(SYS_gettid), files_serviced, total_lines_serviced);
 
 	pthread_exit(0);
 }
 
-struct requester_info * init_requester_info(int num_requesters, int num_files, FILE ** files, pthread_t * requester_threads)
+struct requester_info * init_requester_info(int num_requesters, int num_files, FILE ** files, pthread_t * requester_threads, pthread_mutex_t * serviced_write_lock, FILE * requester_log)
 {
 	struct requester_info * params_list = (struct requester_info *)malloc(sizeof(* params_list) * num_requesters);
 
@@ -40,7 +63,10 @@ struct requester_info * init_requester_info(int num_requesters, int num_files, F
 		*/
 		params_list[i].files = files;
 		params_list[i].file_num = i % num_files;
+		params_list[i].num_files = num_files;
 		params_list[i].thread = &requester_threads[i];
+		params_list[i].serviced_write_lock = serviced_write_lock;
+		params_list[i].requester_log = requester_log;
 	}
 
 	return params_list;
@@ -77,12 +103,14 @@ int main(int argc, char const *argv[])
 	int num_requesters;
 	int num_resolvers;
 	const char * requester_log_name;
+	FILE * requester_log;
 	const char * resolver_log_name;
 	int num_files;
 	const char ** input_file_names; 
 	FILE ** files; // The files that are opened for the duration of the program
 	pthread_t * requester_threads; // The requester_threads
 	struct requester_info * requester_params_list; // The requester parameters
+	pthread_mutex_t serviced_write_lock; // Enforces mutual exclusion on writing to "serviced.txt"
 
 	if(argc < minimum_args || argc > maximum_args)
 	{
@@ -114,12 +142,25 @@ int main(int argc, char const *argv[])
 		return -1;
 	}
 
+	/*
+	* Open and validate requester log
+	*/
+	requester_log = fopen(requester_log_name, "w");
+	if(requester_log == NULL)
+	{
+		printf("Invalid requester log name.\n");
+		return -1;
+	}
+
 	if(num_resolvers > 10 || num_resolvers < 1 || num_requesters > 5 || num_requesters < 1)
 	{
 		printf("Invalid number of resolvers or requesters inputted. Please double check your arguments.\n");
 		return -1;
 	}
 
+	/*
+	* Print information about what the program is going to do
+	*/
 	printf("Processing %d files with %d requesters, %d, resolvers, with files:\n", num_files, num_requesters, num_resolvers);
 
 	for(int i = 0; i < num_files; i++)
@@ -133,9 +174,10 @@ int main(int argc, char const *argv[])
 	* Input Gathering ends here
 	*/
 
-	// Next goal: multiple requester_threads reading the files and writing it
+	pthread_mutex_init(&serviced_write_lock, NULL);
+
 	requester_threads = (pthread_t *)malloc(sizeof(pthread_t) * num_requesters);
-	requester_params_list = init_requester_info(num_requesters, num_files, files, requester_threads);
+	requester_params_list = init_requester_info(num_requesters, num_files, files, requester_threads, &serviced_write_lock, requester_log);
 
 	for(int i = 0; i < num_requesters; i++)
 	{
@@ -147,10 +189,12 @@ int main(int argc, char const *argv[])
 		pthread_join(requester_threads[i], NULL);
 	}
 
-	printf("joined!");
+	printf("joined!\n");
 
 	free(requester_params_list);
 	free(requester_threads);
+	pthread_mutex_destroy(&serviced_write_lock);
+	fclose(requester_log);
 	close_files(num_files, files);
 	free(files);
 	free(input_file_names);
