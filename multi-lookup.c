@@ -1,9 +1,6 @@
 #include "multi-lookup.h"
-#include "util.h"
-#include <stdio.h>
-#include <pthread.h>
-#include <unistd.h>
-#include <sys/syscall.h>
+
+#define MAX_LENGTH 1025
 
 struct buffer_sync
 {
@@ -58,7 +55,7 @@ int write_to_buffer(struct requester_info * info)
 		return 0;
 	}
 
-	printf("At buffer pos %d, thread %ld wrote %s", sync->buffer_count, syscall(SYS_gettid), sync->buffer[sync->buffer_count]);
+	//printf("At buffer pos %d, thread %ld wrote %s", sync->buffer_count, syscall(SYS_gettid), sync->buffer[sync->buffer_count]);
 	sync->buffer_count++;
 
 	pthread_cond_signal(sync->condc);
@@ -81,14 +78,13 @@ char * read_from_buffer(struct resolver_info * info)
 		if(info->all_files_serviced)
 		{
 			pthread_mutex_unlock(sync->mutex);
-			return;
+			return "";
 		}
 	}
 
 	sync->buffer_count--;
 	line = sync->buffer[sync->buffer_count];
-	printf("At buffer pos %d, thread %ld read %s", sync->buffer_count, syscall(SYS_gettid), line);
-	free(line);
+	//printf("At buffer pos %d, thread %ld read %s", sync->buffer_count, syscall(SYS_gettid), line);
 
 	pthread_cond_signal(sync->condp);
 	pthread_mutex_unlock(sync->mutex);
@@ -134,8 +130,31 @@ void * resolver(void * ptr)
 	while(!info->all_files_serviced || info->sync->buffer_count > 0)
 	{
 		char * line = read_from_buffer(info);
+
+		/*
+		* Check the length of the string
+		*/
+		int len = strnlen(line, MAX_LENGTH);
+		if(len == MAX_LENGTH)
+		{
+			printf("Skipping, line %s is longer than 1025 characters.", line);
+			continue;
+		}
+
+		/*
+		* Remove newline characters
+		*/
+		if(line[len - 1] == '\n')
+		{
+			line[len - 1] = '\0';
+		}
+
+		char * ip = malloc(sizeof(*ip) * MAX_LENGTH);
+		dnslookup(line, ip, MAX_LENGTH);
+
 		pthread_mutex_lock(info->results_write_lock);
-		//printf("Thread %ld read %s\n", syscall(SYS_gettid), line);
+		printf("Thread %ld read %s with dnslookup %s\n", syscall(SYS_gettid), line, ip);
+		free(line);
 		pthread_mutex_unlock(info->results_write_lock);
 	}
 
