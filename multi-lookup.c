@@ -38,22 +38,33 @@ struct resolver_info
 * Read and write to buffer are structured very similarly to the pgm4.c
 * code of the consumer producer solution
 */
-void write_to_buffer(char * line, struct requester_info * info)
+int write_to_buffer(struct requester_info * info)
 {
 	struct buffer_sync * sync = info->sync;
 	pthread_mutex_lock(sync->mutex);
 	while(sync->buffer_count == sync->buffer_size)
 	{
-		printf("writer waiting...\n");
 		pthread_cond_wait(sync->condp, sync->mutex);
 	}
 
-	printf("Write to buffer...\n");
-	//sync->buffer[sync->buffer_count] = line;
+	/*
+	* Attempt to write to the buffer
+	*/
+	size_t len = 0;
+	if(getline(&sync->buffer[sync->buffer_count], &len, info->files[info->file_num]) == -1)
+	{
+		free(sync->buffer[sync->buffer_count]);
+		pthread_mutex_unlock(sync->mutex);
+		return 0;
+	}
 
+	printf("At buffer pos %d, thread %ld wrote %s", sync->buffer_count, syscall(SYS_gettid), sync->buffer[sync->buffer_count]);
 	sync->buffer_count++;
+
 	pthread_cond_signal(sync->condc);
 	pthread_mutex_unlock(sync->mutex);
+
+	return 1;
 }
 
 char * read_from_buffer(struct resolver_info * info)
@@ -64,7 +75,6 @@ char * read_from_buffer(struct resolver_info * info)
 	pthread_mutex_lock(sync->mutex);
 	while(sync->buffer_count == 0)
 	{
-		printf("reader waiting...\n");
 		pthread_cond_wait(sync->condc, sync->mutex);
 
 		// There is nothing more to service.
@@ -75,10 +85,11 @@ char * read_from_buffer(struct resolver_info * info)
 		}
 	}
 
-	printf("Read from buffer...\n");
-	//sync->buffer[sync->buffer_count] = line;
-
 	sync->buffer_count--;
+	line = sync->buffer[sync->buffer_count];
+	printf("At buffer pos %d, thread %ld read %s", sync->buffer_count, syscall(SYS_gettid), line);
+	free(line);
+
 	pthread_cond_signal(sync->condp);
 	pthread_mutex_unlock(sync->mutex);
 
@@ -88,18 +99,15 @@ char * read_from_buffer(struct resolver_info * info)
 void * requester(void * ptr)
 {
 	struct requester_info * info = ((struct requester_info *)ptr);
-	char * line = NULL;
-	size_t len = 0;
-	ssize_t line_length;
 	int files_serviced = 0;
 	int total_lines_serviced = 0;
 
 	for(int i = 0; i < info->num_files; i++)
 	{
 		int lines_serviced = 0; // Keeps track if the thread has serviced at least one line of a  file
-		while((line_length = getline(&line, &len, info->files[info->file_num]) != -1))
+
+		while(write_to_buffer(info))
 		{
-			write_to_buffer(line, info);
 			lines_serviced++;
 		}
 
@@ -112,7 +120,6 @@ void * requester(void * ptr)
 		// Move to servicing the next file
 		info->file_num = (info->file_num + 1) % info->num_files;
 	}
-	free(line);
 
 	pthread_mutex_lock(info->serviced_write_lock);
 	fprintf(info->requester_log, "Thread %ld serviced %d files and %d lines \n", syscall(SYS_gettid), files_serviced, total_lines_serviced);
@@ -128,7 +135,7 @@ void * resolver(void * ptr)
 	{
 		char * line = read_from_buffer(info);
 		pthread_mutex_lock(info->results_write_lock);
-		//printf("Thread %ld read %s\n", syscall(SYS_gettid), "nothing");
+		//printf("Thread %ld read %s\n", syscall(SYS_gettid), line);
 		pthread_mutex_unlock(info->results_write_lock);
 	}
 
