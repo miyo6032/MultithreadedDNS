@@ -1,37 +1,5 @@
 #include "multi-lookup.h"
 
-#define MAX_LENGTH 1025
-
-struct buffer_sync
-{
-	char ** buffer;
-	pthread_mutex_t * mutex;
-	pthread_cond_t * condc;
-	pthread_cond_t * condp;
-	int buffer_count;
-	int buffer_size;
-};
-
-struct requester_info
-{
-	FILE ** files;
-	int file_num;
-	int num_files;
-	pthread_t * thread;
-	pthread_mutex_t * serviced_write_lock;
-	FILE * requester_log;
-	struct buffer_sync * sync;
-};
-
-struct resolver_info
-{
-	struct buffer_sync * sync;
-	pthread_mutex_t * results_write_lock;
-	int all_files_serviced;
-	int read_count;
-	FILE * resolver_log;
-};
-
 /*
 * Read and write to buffer are structured very similarly to the pgm4.c
 * code of the consumer producer solution
@@ -57,7 +25,6 @@ int write_to_buffer(struct requester_info * info)
 		return 0;
 	}
 
-	//printf("At buffer pos %d, thread %ld wrote %s", sync->buffer_count, syscall(SYS_gettid), sync->buffer[sync->buffer_count]);
 	sync->buffer_count++;
 
 	pthread_cond_signal(sync->condc);
@@ -66,6 +33,12 @@ int write_to_buffer(struct requester_info * info)
 	return 1;
 }
 
+/*
+* The read from buffer is similar to the pgm4.c example. The big difference is that in order to
+* detect when a resolver is finished, it must detect that the buffer is equal to zero and
+* that the requester threads have all terminated. This is accomplished with "sync->requester_threads_done"
+* and the cond_broadcase to wake any blocked resolver threads up that that they can terminate
+*/
 char * read_from_buffer(struct resolver_info * info)
 {
 	char * line = "Yodobashi camera";
@@ -77,7 +50,7 @@ char * read_from_buffer(struct resolver_info * info)
 		pthread_cond_wait(sync->condc, sync->mutex);
 
 		// There is nothing more to service.
-		if(info->all_files_serviced)
+		if(info->requester_threads_done)
 		{
 			pthread_mutex_unlock(sync->mutex);
 			return "";
@@ -86,7 +59,6 @@ char * read_from_buffer(struct resolver_info * info)
 
 	sync->buffer_count--;
 	line = sync->buffer[sync->buffer_count];
-	//printf("At buffer pos %d, thread %ld read %s", sync->buffer_count, syscall(SYS_gettid), line);
 
 	pthread_cond_signal(sync->condp);
 	pthread_mutex_unlock(sync->mutex);
@@ -94,6 +66,11 @@ char * read_from_buffer(struct resolver_info * info)
 	return line;
 }
 
+/*
+* The requester will read from the files line by line and call write_to_buffer to
+* safely write. It will try to help out with every file. When the for loop ends,
+* every file has been serviced.
+*/
 void * requester(void * ptr)
 {
 	struct requester_info * info = ((struct requester_info *)ptr);
@@ -126,18 +103,23 @@ void * requester(void * ptr)
 	pthread_exit(0);
 }
 
+/*
+* The resolver uses read_from_buffer to get a host name from the buffer
+* It then strips the \n because that is problematic in the dnslookup
+* It will then try to look up the dns file.
+*/
 void * resolver(void * ptr)
 {
 	struct resolver_info * info = ((struct resolver_info *) ptr);
-	while(!info->all_files_serviced || info->sync->buffer_count > 0)
+	while(!info->requester_threads_done || info->sync->buffer_count > 0)
 	{
 		char * line = read_from_buffer(info);
 
 		/*
 		* Check the length of the string
 		*/
-		int len = strnlen(line, MAX_LENGTH);
-		if(len == MAX_LENGTH)
+		int len = strnlen(line, MAX_LINE_LENGTH);
+		if(len == MAX_LINE_LENGTH)
 		{
 			printf("Skipping, host name %s is longer than 1025 characters.", line);
 			continue;
@@ -151,18 +133,20 @@ void * resolver(void * ptr)
 			line[len - 1] = '\0';
 		}
 
-		char * ip = malloc(sizeof(*ip) * MAX_LENGTH);
-		strncpy(ip, "", MAX_LENGTH);
-		if(dnslookup(line, ip, MAX_LENGTH) == UTIL_FAILURE)
+		char * ip = malloc(sizeof(*ip) * MAX_LINE_LENGTH);
+		strncpy(ip, "", MAX_LINE_LENGTH);
+		if(dnslookup(line, ip, MAX_LINE_LENGTH) == UTIL_FAILURE)
 		{
-			printf("Warning: host %s failed to connect\n", line);
+			pthread_mutex_lock(info->results_write_lock);
+			fprintf(stderr, "Warning: host %s failed to connect\n", line);
+			pthread_mutex_unlock(info->results_write_lock);
 		}
 
 		pthread_mutex_lock(info->results_write_lock);
-		fprintf(info->resolver_log, "Thread %ld read %s with dnslookup %s\n", syscall(SYS_gettid), line, ip);
+		fprintf(info->resolver_log, "%s,%s\n", line, ip);
+		pthread_mutex_unlock(info->results_write_lock);
 		free(line);
 		free(ip);
-		pthread_mutex_unlock(info->results_write_lock);
 	}
 
 	pthread_exit(0);
@@ -195,7 +179,7 @@ void close_files(int num_files, FILE ** files)
 int main(int argc, char const *argv[])
 {
 	int minimum_args = 6;
-	int maximum_args = minimum_args + 9; // To bound the number of files
+	int maximum_args = minimum_args + MAX_FILES - 1; // To bound the number of files
 	int num_requesters;
 	int num_resolvers;
 	const char * requester_log_name;
@@ -209,11 +193,13 @@ int main(int argc, char const *argv[])
 	pthread_t * resolver_threads;
 	struct requester_info * requester_params_list; // The requester parameters
 	pthread_mutex_t serviced_write_lock; // Enforces mutual exclusion on writing to "serviced.txt"
-	int buffer_size = 8;
 	char ** buffer;
 	struct buffer_sync * sync;
 	struct resolver_info * resolver_params;
 	pthread_mutex_t results_write_lock;
+	struct timeval start;
+	struct timeval end;
+	gettimeofday(&start, NULL);
 
 	/*
 	* All of these are for the bounded buffer problem + reader-writer problem
@@ -269,7 +255,10 @@ int main(int argc, char const *argv[])
 		return -1;
 	}
 
-	if(num_resolvers > 10 || num_resolvers < 1 || num_requesters > 5 || num_requesters < 1)
+	/*
+	* Validate number of requesters and resolvers
+	*/
+	if(num_resolvers > MAX_RESOLVER_THREADS || num_resolvers < 1 || num_requesters > MAX_REQUESTER_THREADS || num_requesters < 1)
 	{
 		printf("Invalid number of resolvers or requesters inputted. Please double check your arguments.\n");
 		return -1;
@@ -278,18 +267,8 @@ int main(int argc, char const *argv[])
 	/*
 	* Print information about what the program is going to do
 	*/
-	printf("Processing %d files with %d requesters, %d, resolvers, with files:\n", num_files, num_requesters, num_resolvers);
-
-	for(int i = 0; i < num_files; i++)
-	{
-		printf("%s\n", input_file_names[i]);
-	}
-
+	printf("Processing %d files with %d requesters, %d, resolvers.\n", num_files, num_requesters, num_resolvers);
 	printf("Output will be place in %s for requesters, and %s for resolvers\n", requester_log_name, resolver_log_name);
-
-	/**
-	* Input Gathering ends here
-	*/
 
 	pthread_mutex_init(&serviced_write_lock, NULL);
 	pthread_mutex_init(&mutex, NULL);
@@ -301,7 +280,7 @@ int main(int argc, char const *argv[])
 	resolver_threads = malloc(sizeof(pthread_t) * num_resolvers);
 	requester_params_list = (struct requester_info *)malloc(sizeof(* requester_params_list) * num_requesters);
 	resolver_params = malloc(sizeof(* resolver_params));
-	buffer = malloc((sizeof(*buffer)) * buffer_size);
+	buffer = malloc((sizeof(*buffer)) * BUFFER_SIZE);
 	sync = malloc(sizeof(*sync));
 
 	sync->mutex = &mutex;
@@ -309,7 +288,7 @@ int main(int argc, char const *argv[])
 	sync->condp = &condp;
 	sync->buffer = buffer;
 	sync->buffer_count = 0;
-	sync->buffer_size = buffer_size;
+	sync->buffer_size = BUFFER_SIZE;
 
 	/*
 	* Initialize parameters for the requester threads
@@ -328,10 +307,9 @@ int main(int argc, char const *argv[])
 	/*
 	* Initialize parameters for resolver threads
 	*/
-
 	resolver_params->sync = sync;
 	resolver_params->results_write_lock = &results_write_lock;
-	resolver_params->all_files_serviced = 0;
+	resolver_params->requester_threads_done = 0;
 	resolver_params->read_count = 0;
 	resolver_params->resolver_log = resolver_log;
 
@@ -352,8 +330,9 @@ int main(int argc, char const *argv[])
 
 	// Once all the requester threads have joined together, 
 	// all files have been serviced from the requester side
+	// We broadcast to wake up any blocked resolver threads so they can terminate
 	pthread_mutex_lock(sync->mutex);
-	resolver_params->all_files_serviced = 1;
+	resolver_params->requester_threads_done = 1;
 	pthread_cond_broadcast(sync->condc);
 	pthread_mutex_unlock(sync->mutex);
 
@@ -361,8 +340,6 @@ int main(int argc, char const *argv[])
 	{
 		pthread_join(resolver_threads[i], NULL);
 	}
-
-	printf("joined!\n");
 
 	free(sync);
 	free(buffer);
@@ -380,6 +357,9 @@ int main(int argc, char const *argv[])
 	close_files(num_files, files);
 	free(files);
 	free(input_file_names);
+
+	gettimeofday(&end, NULL);
+	printf("Time taken: %ld seconds.\n\n", end.tv_sec - start.tv_sec);
 
 	return 0;
 }

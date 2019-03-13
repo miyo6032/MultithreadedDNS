@@ -3,8 +3,8 @@ INCLUDE = /usr/lib
 LIBS = -lpthread
 OBJS = 
 
-pa3: multi-lookup.c util.c
-	$(CC) -o pa3 multi-lookup.c util.c $(CFLAGS) $(LIBS)
+multi-lookup: multi-lookup.c util.c
+	$(CC) -Wall -Wextra -o multi-lookup multi-lookup.c util.c $(CFLAGS) $(LIBS)
 
 clean:
-	rm -f pa3
+	rm -f multi-lookup
