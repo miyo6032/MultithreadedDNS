@@ -29,6 +29,7 @@ struct resolver_info
 	pthread_mutex_t * results_write_lock;
 	int all_files_serviced;
 	int read_count;
+	FILE * resolver_log;
 };
 
 /*
@@ -48,6 +49,7 @@ int write_to_buffer(struct requester_info * info)
 	* Attempt to write to the buffer
 	*/
 	size_t len = 0;
+	sync->buffer[sync->buffer_count] = "";
 	if(getline(&sync->buffer[sync->buffer_count], &len, info->files[info->file_num]) == -1)
 	{
 		free(sync->buffer[sync->buffer_count]);
@@ -137,7 +139,7 @@ void * resolver(void * ptr)
 		int len = strnlen(line, MAX_LENGTH);
 		if(len == MAX_LENGTH)
 		{
-			printf("Skipping, line %s is longer than 1025 characters.", line);
+			printf("Skipping, host name %s is longer than 1025 characters.", line);
 			continue;
 		}
 
@@ -150,11 +152,16 @@ void * resolver(void * ptr)
 		}
 
 		char * ip = malloc(sizeof(*ip) * MAX_LENGTH);
-		dnslookup(line, ip, MAX_LENGTH);
+		strncpy(ip, "", MAX_LENGTH);
+		if(dnslookup(line, ip, MAX_LENGTH) == UTIL_FAILURE)
+		{
+			printf("Warning: host %s failed to connect\n", line);
+		}
 
 		pthread_mutex_lock(info->results_write_lock);
-		printf("Thread %ld read %s with dnslookup %s\n", syscall(SYS_gettid), line, ip);
+		fprintf(info->resolver_log, "Thread %ld read %s with dnslookup %s\n", syscall(SYS_gettid), line, ip);
 		free(line);
+		free(ip);
 		pthread_mutex_unlock(info->results_write_lock);
 	}
 
@@ -194,6 +201,7 @@ int main(int argc, char const *argv[])
 	const char * requester_log_name;
 	FILE * requester_log;
 	const char * resolver_log_name;
+	FILE * resolver_log;
 	int num_files;
 	const char ** input_file_names; 
 	FILE ** files; // The files that are opened for the duration of the program
@@ -245,12 +253,19 @@ int main(int argc, char const *argv[])
 	}
 
 	/*
-	* Open and validate requester log
+	* Open and validate logs
 	*/
 	requester_log = fopen(requester_log_name, "w");
 	if(requester_log == NULL)
 	{
-		printf("Invalid requester log name.\n");
+		printf("Invalid requester log name\n");
+		return -1;
+	}
+
+	resolver_log = fopen(resolver_log_name, "w");
+	if(resolver_log == NULL)
+	{
+		printf("Invalid resolver log name\n");
 		return -1;
 	}
 
@@ -318,6 +333,7 @@ int main(int argc, char const *argv[])
 	resolver_params->results_write_lock = &results_write_lock;
 	resolver_params->all_files_serviced = 0;
 	resolver_params->read_count = 0;
+	resolver_params->resolver_log = resolver_log;
 
 	for(int i = 0; i < num_requesters; i++)
 	{
@@ -359,6 +375,7 @@ int main(int argc, char const *argv[])
 	pthread_mutex_destroy(&mutex);
 	pthread_cond_destroy(&condc);
 	pthread_cond_destroy(&condp);
+	fclose(resolver_log);
 	fclose(requester_log);
 	close_files(num_files, files);
 	free(files);
