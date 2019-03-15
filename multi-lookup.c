@@ -1,3 +1,8 @@
+/*
+* Programming Assignment 3
+* Michael Yoshimura
+*/
+
 #include "multi-lookup.h"
 
 /*
@@ -47,14 +52,14 @@ char * read_from_buffer(struct resolver_info * info)
 	pthread_mutex_lock(sync->mutex);
 	while(sync->buffer_count == 0)
 	{
-		pthread_cond_wait(sync->condc, sync->mutex);
-
 		// There is nothing more to service.
 		if(info->requester_threads_done)
 		{
 			pthread_mutex_unlock(sync->mutex);
 			return "";
 		}
+
+		pthread_cond_wait(sync->condc, sync->mutex);
 	}
 
 	sync->buffer_count--;
@@ -359,7 +364,8 @@ int main(int argc, char const *argv[])
 	free(input_file_names);
 
 	gettimeofday(&end, NULL);
-	printf("Time taken: %ld seconds.\n\n", end.tv_sec - start.tv_sec);
+	float microseconds = (end.tv_usec - start.tv_usec) * pow(10, -6);
+	printf("Time taken: %lf seconds microseconds.\n\n", end.tv_sec - start.tv_sec + microseconds);
 
 	return 0;
 }

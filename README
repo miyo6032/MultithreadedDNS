@@ -1,0 +1,8 @@
+Michael Yoshimura: DNS resolution engine
+
+Run 'make' create the multi-lookup executable
+
+To run, the format is ./multi-lookup <# requester> <# resolver> <requester log> <resolver log> [ <data file> ...] 
+where the number of data files is between 1 and 10.
+
+To clean up multi-lookup run 'make clean'

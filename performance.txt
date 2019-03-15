@@ -1,3 +1,6 @@
+Performance Results
+Michael Yoshimura
+
 1 requester and 1 resolver
 Total run time: 80
 Thread 40039 serviced 5 files and 103 lines 
@@ -37,4 +40,13 @@ Thread 40107 serviced 2 files and 10 lines
 Thread 40108 serviced 2 files and 11 lines 
 Thread 40105 serviced 2 files and 12 lines 
 
-As the number of threads increased, the program performance also increased. The most interesting aspect is the comparison between 3 req + 1 res and 1 req + 3 res. It is clear that increasing the number of resolvers dramatically increased the performance whereas the requesters had little impact. This observation is also backed up by the fact that increasing the requesters from 5 to 8 and keeping the resolvers at 5 has no positive performance impact. This is probably due to the fact that looking up addresses takes a lot of time because transferring data through a network is very slow. Thus, having more resolver threads able to do dns lookups requests would increase the performance. On the requester side, there was no networking, so it makes sense that this would have less impact. In other words, my speculation is that because of the much larger overhead of the dnslookup, the resolver threads had the most impact because they paralellized that part.
+As the number of threads increased, the program performance also increased. 
+The most interesting aspect is the comparison between 3 req + 1 res and 1 req + 3 res. 
+It is clear that increasing the number of resolvers dramatically increased the performance whereas the 
+requesters had little impact. This observation is also backed up by the fact that increasing the requesters 
+from 5 to 8 and keeping the resolvers at 5 has no positive performance impact. This is probably due to the 
+fact that looking up addresses takes a lot of time because transferring data through a network is very slow. 
+Thus, having more resolver threads able to do dns lookups requests would increase the performance. On the 
+requester side, there was no networking, so it makes sense that this would have less impact. In other words, 
+my speculation is that because of the much larger overhead of the dnslookup, the resolver threads had the most 
+impact because they paralellized that part.

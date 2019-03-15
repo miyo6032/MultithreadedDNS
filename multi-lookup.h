@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/syscall.h>
+#include <math.h>
 #include "util.h"
 
 #define MAX_LINE_LENGTH 1025
