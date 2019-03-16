@@ -2,27 +2,27 @@ Performance Results
 Michael Yoshimura
 
 1 requester and 1 resolver
-Total run time: 80
+Total run time: 61.234264
 Thread 40039 serviced 5 files and 103 lines 
 
 1 requester and 3 resolvers
-Total run time: 25
+Total run time: 22.746510
 Thread 40061 serviced 5 files and 103 lines 
 
 3 requesters and 1 resolver
-Total run time: 82
+Total run time: 57.767349
 Thread 40079 serviced 3 files and 28 lines 
 Thread 40078 serviced 4 files and 29 lines 
 Thread 40077 serviced 5 files and 46 lines
 
 3 requesters and 3 resolvers
-Total run time: 27
+Total run time: 23.299765
 Thread 40085 serviced 3 files and 30 lines 
 Thread 40084 serviced 2 files and 29 lines 
 Thread 40086 serviced 3 files and 44 lines 
 
 5 requesters and 5 resolvers
-Total run time: 15
+Total run time: 14.673593
 Thread 40094 serviced 1 files and 16 lines 
 Thread 40095 serviced 1 files and 17 lines 
 Thread 40091 serviced 5 files and 34 lines 
@@ -30,7 +30,7 @@ Thread 40092 serviced 4 files and 17 lines
 Thread 40093 serviced 3 files and 19 lines 
 
 8 requesters and 5 resolvers
-Total run time: 19
+Total run time: 13.770421
 Thread 40106 serviced 3 files and 12 lines 
 Thread 40110 serviced 2 files and 10 lines 
 Thread 40104 serviced 1 files and 11 lines 

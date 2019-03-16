@@ -13,7 +13,6 @@ int write_to_buffer(struct requester_info * info)
 {
 	struct buffer_sync * sync = info->sync;
 
-
 	/*
 	* First tries to read from its file, and locks only that file using a lock unique to that file
 	*/
