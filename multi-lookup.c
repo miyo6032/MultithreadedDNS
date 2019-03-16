@@ -12,24 +12,32 @@
 int write_to_buffer(struct requester_info * info)
 {
 	struct buffer_sync * sync = info->sync;
+
+
+	/*
+	* First tries to read from its file, and locks only that file using a lock unique to that file
+	*/
+	char * line = malloc(sizeof(*line) * MAX_LINE_LENGTH);
+
+	pthread_mutex_lock(info->input_file_locks[info->file_num]);
+	if(fgets_unlocked(line, MAX_LINE_LENGTH, info->files[info->file_num]) == NULL)
+	{
+		pthread_mutex_unlock(info->input_file_locks[info->file_num]);
+		free(line);
+		return 0;
+	}
+	pthread_mutex_unlock(info->input_file_locks[info->file_num]);
+
+	/*
+	* Then attempt to write to the buffer
+	*/
 	pthread_mutex_lock(sync->mutex);
 	while(sync->buffer_count == sync->buffer_size)
 	{
 		pthread_cond_wait(sync->condp, sync->mutex);
 	}
 
-	/*
-	* Attempt to write to the buffer
-	*/
-	size_t len = 0;
-	sync->buffer[sync->buffer_count] = "";
-	if(getline(&sync->buffer[sync->buffer_count], &len, info->files[info->file_num]) == -1)
-	{
-		free(sync->buffer[sync->buffer_count]);
-		pthread_mutex_unlock(sync->mutex);
-		return 0;
-	}
-
+	sync->buffer[sync->buffer_count] = line;
 	sync->buffer_count++;
 
 	pthread_cond_signal(sync->condc);
@@ -101,8 +109,11 @@ void * requester(void * ptr)
 		info->file_num = (info->file_num + 1) % info->num_files;
 	}
 
+	char output[100];
+	sprintf(output, "Thread %ld serviced %d files and %d lines \n", syscall(SYS_gettid), files_serviced, total_lines_serviced);
+
 	pthread_mutex_lock(info->serviced_write_lock);
-	fprintf(info->requester_log, "Thread %ld serviced %d files and %d lines \n", syscall(SYS_gettid), files_serviced, total_lines_serviced);
+	fputs_unlocked(output, info->requester_log);
 	pthread_mutex_unlock(info->serviced_write_lock);
 
 	pthread_exit(0);
@@ -142,13 +153,14 @@ void * resolver(void * ptr)
 		strncpy(ip, "", MAX_LINE_LENGTH);
 		if(dnslookup(line, ip, MAX_LINE_LENGTH) == UTIL_FAILURE)
 		{
-			pthread_mutex_lock(info->results_write_lock);
 			fprintf(stderr, "Warning: host %s failed to connect\n", line);
-			pthread_mutex_unlock(info->results_write_lock);
 		}
 
+		char output[MAX_LINE_LENGTH * 2 + 1];
+		sprintf(output, "%s,%s\n", line, ip);
+
 		pthread_mutex_lock(info->results_write_lock);
-		fprintf(info->resolver_log, "%s,%s\n", line, ip);
+		fputs_unlocked(output, info->resolver_log);
 		pthread_mutex_unlock(info->results_write_lock);
 		free(line);
 		free(ip);
@@ -197,6 +209,7 @@ int main(int argc, char const *argv[])
 	pthread_t * requester_threads; // The requester_threads
 	pthread_t * resolver_threads;
 	struct requester_info * requester_params_list; // The requester parameters
+	pthread_mutex_t ** input_file_locks;
 	pthread_mutex_t serviced_write_lock; // Enforces mutual exclusion on writing to "serviced.txt"
 	char ** buffer;
 	struct buffer_sync * sync;
@@ -275,6 +288,16 @@ int main(int argc, char const *argv[])
 	printf("Processing %d files with %d requesters, %d, resolvers.\n", num_files, num_requesters, num_resolvers);
 	printf("Output will be place in %s for requesters, and %s for resolvers\n", requester_log_name, resolver_log_name);
 
+	input_file_locks = malloc(sizeof(*input_file_locks) * num_files);
+
+	// Initialize n different locks for n input files
+	for(int i = 0; i < num_files; i++)
+	{
+		pthread_mutex_t * m = malloc(sizeof(*m));
+		pthread_mutex_init(m, NULL);
+		input_file_locks[i] = m;
+	}
+
 	pthread_mutex_init(&serviced_write_lock, NULL);
 	pthread_mutex_init(&mutex, NULL);
 	pthread_cond_init(&condc, NULL);
@@ -307,6 +330,7 @@ int main(int argc, char const *argv[])
 		requester_params_list[i].serviced_write_lock = &serviced_write_lock;
 		requester_params_list[i].requester_log = requester_log;
 		requester_params_list[i].sync = sync;
+		requester_params_list[i].input_file_locks = input_file_locks;
 	}
 
 	/*
@@ -354,6 +378,14 @@ int main(int argc, char const *argv[])
 	free(requester_threads);
 	pthread_mutex_destroy(&results_write_lock);
 	pthread_mutex_destroy(&serviced_write_lock);
+
+	for(int i = 0; i < num_files; i++)
+	{
+		pthread_mutex_destroy(input_file_locks[i]);
+		free(input_file_locks[i]);
+	}
+
+	free(input_file_locks);
 	pthread_mutex_destroy(&mutex);
 	pthread_cond_destroy(&condc);
 	pthread_cond_destroy(&condp);
@@ -365,7 +397,7 @@ int main(int argc, char const *argv[])
 
 	gettimeofday(&end, NULL);
 	float microseconds = (end.tv_usec - start.tv_usec) * pow(10, -6);
-	printf("Time taken: %lf seconds microseconds.\n\n", end.tv_sec - start.tv_sec + microseconds);
+	printf("Time taken: %lf seconds.\n\n", end.tv_sec - start.tv_sec + microseconds);
 
 	return 0;
 }

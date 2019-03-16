@@ -31,6 +31,7 @@ struct buffer_sync
 struct requester_info
 {
 	FILE ** files;
+	pthread_mutex_t ** input_file_locks;
 	int file_num;
 	int num_files;
 	pthread_t * thread;
@@ -47,6 +48,10 @@ struct resolver_info
 	int read_count;
 	FILE * resolver_log;
 };
+
+// Non standard unlocked io functions need to be declared a prototype
+char *fgets_unlocked(char *s, int n, FILE *stream);
+int fputs_unlocked(const char *s, FILE *stream);
 
 int write_to_buffer(struct requester_info * info);
 char * read_from_buffer(struct resolver_info * info);
